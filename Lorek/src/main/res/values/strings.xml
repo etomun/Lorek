@@ -1,0 +1,4 @@
+<resources>
+    <string name="module_name">Lorek</string>
+    <string name="alert_invalid_format">Unsupported format</string>
+</resources>

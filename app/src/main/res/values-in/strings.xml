@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">ZebraCross</string>
+    <string name="subtext_qr_scanner">Arahkan kamera Anda sampai memuat seluruh QR untuk memulai scan</string>
+    <string name="subtext_barcode_scanner">Arahkan kamera Anda sampai memuat seluruh barcode untuk memulai scan</string>
+    <string name="title_qr_scanner">QR Scanner</string>
+    <string name="title_barcode_scanner">Barcode Scanner</string>
+</resources>
