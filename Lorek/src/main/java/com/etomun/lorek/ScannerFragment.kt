@@ -22,6 +22,7 @@ import com.etomun.lorek.databinding.FragmentScannerBinding
 import com.etomun.lorek.mlkit.CameraAnalyzer
 import com.etomun.lorek.mlkit.FileAnalyzer
 import com.google.common.util.concurrent.ListenableFuture
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 
 private const val ARG_MODE = "mode"
@@ -46,12 +47,13 @@ class ScannerFragment : Fragment() {
 
     private var lastResult: String? = null
 
+    private lateinit var camProviderFuture: ListenableFuture<ProcessCameraProvider>
+    private lateinit var mainExecutor: Executor
+
     private lateinit var preview: Preview
     private lateinit var imageAnalysis: ImageAnalysis
-    private lateinit var analizer: CameraAnalyzer
-    private lateinit var camProviderFuture: ListenableFuture<ProcessCameraProvider>
-    private lateinit var camControl: CameraControl
-    private lateinit var camInfo: CameraInfo
+    private var camControl: CameraControl? = null
+
     private val camExecutor by lazy { Executors.newSingleThreadExecutor() }
     private val cameraSelector by lazy {
         CameraSelector.Builder().requireLensFacing(CameraSelector.LENS_FACING_BACK).build()
@@ -61,7 +63,7 @@ class ScannerFragment : Fragment() {
     private val reqPermissions =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             if (it.entries.all { p -> p.value == true }) {
-                provideCamera()
+                startPreview()
             }
         }
 
@@ -110,21 +112,51 @@ class ScannerFragment : Fragment() {
         binding.cbGallery.setOnCheckedChangeListener { _, b -> if (b) pickPhoto() }
         binding.cbFlash.setOnCheckedChangeListener { _, b -> switchFlash(b) }
 
-        context?.let {
+        activity?.let {
             camProviderFuture = ProcessCameraProvider.getInstance(it)
-            provideCamera()
+            mainExecutor = ContextCompat.getMainExecutor(it)
         }
+
+        binding.vCamera.post {
+            val rotation = binding.vCamera.rotation.toInt()
+
+            // preview use case
+            preview = Preview.Builder()
+                .setTargetResolution(getResolution())
+                .setTargetRotation(rotation)
+                .build()
+            preview.setSurfaceProvider(binding.vCamera.surfaceProvider)
+
+            // image analysis use case
+            imageAnalysis = ImageAnalysis.Builder()
+                .setTargetResolution(getResolution())
+                .setTargetRotation(rotation)
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+            val analyzer = CameraAnalyzer(binding.vScanner.frameRect, mode) { onScanResult(it) }
+            imageAnalysis.setAnalyzer(camExecutor, analyzer)
+        }
+        startPreview()
     }
 
     override fun onResume() {
         super.onResume()
         binding.cbGallery.isChecked = false
         binding.vScanner.resumeAnim()
+
+        operateCamera {
+            camProviderFuture.get().also {
+                it.bindToLifecycle(this, cameraSelector, imageAnalysis)
+            }
+        }
     }
 
     override fun onPause() {
         super.onPause()
+        binding.cbFlash.isChecked = false
         binding.vScanner.pauseAnim()
+
+        operateCamera { camProviderFuture.get().unbind(imageAnalysis) }
     }
 
     override fun onDestroyView() {
@@ -152,49 +184,32 @@ class ScannerFragment : Fragment() {
     }
 
     private fun switchFlash(on: Boolean) {
-        camControl.enableTorch(on)
+        camControl?.enableTorch(on)
     }
 
     private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all { p ->
         context?.let { ContextCompat.checkSelfPermission(it, p) == PERMISSION_GRANTED } == true
     }
 
-    private fun provideCamera() {
+    private fun startPreview() {
+        operateCamera {
+            camProviderFuture.get().also {
+                camControl = it.bindToLifecycle(this, cameraSelector, preview).cameraControl
+            }
+        }
+    }
+
+    private fun operateCamera(action: () -> Unit) {
         if (!allPermissionsGranted()) {
             reqPermissions.launch(REQUIRED_PERMISSIONS)
             return
         }
 
-        activity?.let { ContextCompat.getMainExecutor(it) }?.also { executor ->
-            camProviderFuture.addListener({
-                binding.vCamera.post {
-                    val rotation = binding.vCamera.rotation.toInt()
-                    preview = Preview.Builder()
-                        .setTargetResolution(getResolution())
-                        .setTargetRotation(rotation)
-                        .build()
-                    imageAnalysis = ImageAnalysis.Builder()
-                        .setTargetResolution(getResolution())
-                        .setTargetRotation(rotation)
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .build()
-                    analizer =
-                        CameraAnalyzer(binding.vScanner.frameRect, mode) { onScanResult(it) }
-
-                    val cameraProvider = camProviderFuture.get()
-                    startCamera(cameraProvider)
-                }
-            }, executor)
+        try {
+            camProviderFuture.addListener({ action() }, mainExecutor)
+        } catch (e: Exception) {
+            callback?.onFailed(e.message.orEmpty())
         }
-    }
-
-    private fun startCamera(cameraProvider: ProcessCameraProvider) {
-        imageAnalysis.setAnalyzer(camExecutor, analizer)
-        cameraProvider.unbindAll()
-        val camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis)
-        camControl = camera.cameraControl
-        camInfo = camera.cameraInfo
-        preview.setSurfaceProvider(binding.vCamera.surfaceProvider)
     }
 
     private fun onScanResult(result: String) {

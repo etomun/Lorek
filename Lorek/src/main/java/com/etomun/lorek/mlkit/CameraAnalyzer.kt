@@ -22,7 +22,7 @@ class CameraAnalyzer(
     override fun analyze(image: ImageProxy) {
         val img = image.image
         if (img != null) {
-            img.cropRect = scanRect
+//            img.cropRect = scanRect
             val inputImage = InputImage.fromMediaImage(img, image.imageInfo.rotationDegrees)
 
 //            Scan with Crop Rect
@@ -61,7 +61,7 @@ class CameraAnalyzer(
     }
 
     private fun cropNv21(src: ByteArray, width: Int, height: Int, cropRect: Rect): ByteArray {
-        val cropLeft = cropRect.left
+        val cropLeft = cropRect.left * 2
         val cropTop = cropRect.top
         val cropWidth = cropRect.width()
         val cropHeight = cropRect.height()
@@ -94,6 +94,53 @@ class CameraAnalyzer(
                 uvDestPos0 += cropWidth
             }
         }
+        return nData
+    }
+
+    private fun cropNv21X(src: ByteArray, width: Int, height: Int, cropRect: Rect): ByteArray {
+        val cropLeft = cropRect.left
+        val cropTop = cropRect.top
+        val cropWidth = cropRect.width()
+        val cropHeight = cropRect.height()
+
+        if (cropLeft > width || cropTop > height) {
+            return ByteArray(0)
+        }
+
+        val yUnit = cropWidth * cropHeight
+        val srcUnit = width * height
+
+        val uv = yUnit / 2
+        val nData = ByteArray(yUnit + uv)
+
+        var nPos = (cropTop - 1) * width
+        var mPos: Int
+
+        for (i in cropTop until cropTop + cropHeight) {
+            nPos += width
+            mPos = srcUnit + (i shr 1) * width
+
+            for (j in cropLeft until cropLeft + cropWidth) {
+                val dest = (i - cropTop + 1) * cropWidth - j + cropLeft - 1
+//                System.arraycopy(src, nPos + j, nData, dest, cropWidth)
+                nData[dest] = src[nPos + j]
+
+                if ((i and 1) == 0 && (mPos + j) < src.size) {
+                    var m = yUnit + ((i - cropTop shr 1) + 1) * cropWidth - j + cropLeft - 1
+//                    var m = cropWidth * cropHeight - cropTop / 2 * cropWidth
+                    if ((m and 1) == 0 && (mPos + j) < src.size) {
+                        m++
+//                        System.arraycopy(src, mPos + j, nData, m, cropWidth)
+                        nData[m] = src[mPos + j]
+                        continue
+                    }
+                    m--
+//                    System.arraycopy(src, mPos + j, nData, m, cropWidth)
+                    nData[m] = src[mPos + j]
+                }
+            }
+        }
+
         return nData
     }
 
