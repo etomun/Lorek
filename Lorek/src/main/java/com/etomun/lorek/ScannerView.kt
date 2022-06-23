@@ -4,6 +4,7 @@ import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
+import android.util.Log
 import android.view.View
 import android.view.animation.LinearInterpolator
 
@@ -15,10 +16,10 @@ class ScannerView @JvmOverloads constructor(
     private val frameH = 280.dp()
     private val frameW = 280.dp()
     private val frameOffsetX = 0.dp()
-    private val frameOffsetY = -(64.dp())
-    private val frameStrokeW = 4.dp()
+    private val frameOffsetY = 0.dp()
+    private val frameStrokeW = 3.dp()
     private val scannerSpeed = 1500L
-    private var frameCornerRad = 40f
+    private var frameCornerRad = 32f
 
     private var lineHeight = 0
     private var topAnim = 0
@@ -26,20 +27,20 @@ class ScannerView @JvmOverloads constructor(
 
     private val lineRect: Rect by lazy { Rect() }
     private val _frameRect: Rect by lazy { Rect() }
-    val frameRect get() = _frameRect
+    private var customRect: Rect? = null
+    val frameRect get() = customRect ?: _frameRect
 
     private var scanMode: ScanMode
     private var lineDown: Bitmap
     private var lineUp: Bitmap
     private var paint: Paint
-    private lateinit var valueAnimator: ValueAnimator
+    private var valueAnimator: ValueAnimator? = null
 
     init {
         val attr = context.obtainStyledAttributes(attrs, R.styleable.ScannerView)
         scanMode = ScanMode.getParams(attr.getInt(R.styleable.ScannerView_scanMode, 0))
         attr.recycle()
 
-        frameCornerRad = if (scanMode is ScanMode.BarCode) 20f else 40f
         lineDown = BitmapFactory.decodeResource(resources, R.drawable.line_down)
         lineUp = BitmapFactory.decodeResource(resources, R.drawable.line_up)
         lineHeight = lineDown.height
@@ -49,8 +50,9 @@ class ScannerView @JvmOverloads constructor(
         }
     }
 
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        frameCornerRad = if (scanMode is ScanMode.BarCode) 24f else 32f
         val yOffset = if (scanMode is ScanMode.BarCode) frameH / 4 else frameH / 2
         _frameRect.set(
             (width / 2) - (frameW / 2) + frameOffsetX,
@@ -58,18 +60,31 @@ class ScannerView @JvmOverloads constructor(
             (width / 2) + (frameW / 2) + frameOffsetX,
             (height / 2) + yOffset + frameOffsetY
         )
+    }
 
-        drawFrame(canvas, _frameRect)
-        drawShadow(canvas, _frameRect)
-        drawLine(canvas, _frameRect)
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        drawFrame(canvas, frameRect)
+        drawShadow(canvas, frameRect)
+        drawLine(canvas, frameRect)
         initAnim()
         startAnim()
     }
 
+    /* Reset valueAnimator & animating line properties */
+    private fun resetAnim() {
+        stopAnim()
+        valueAnimator?.removeAllListeners()
+        valueAnimator = null
+        topAnim = 0
+        isReversing = false
+    }
+
+    /* Init valueAnimator */
     private fun initAnim() {
-        if (!::valueAnimator.isInitialized) {
+        if (valueAnimator == null && frameRect.height() > 0) {
             valueAnimator =
-                ValueAnimator.ofInt(_frameRect.top - lineHeight, _frameRect.bottom).apply {
+                ValueAnimator.ofInt(frameRect.top - lineHeight, frameRect.bottom).apply {
                     repeatCount = ValueAnimator.INFINITE
                     repeatMode = ValueAnimator.REVERSE
                     duration = scannerSpeed
@@ -77,6 +92,7 @@ class ScannerView @JvmOverloads constructor(
                     addUpdateListener { animation: ValueAnimator ->
                         (animation.animatedValue as Int).let {
                             isReversing = topAnim >= it
+                            Log.e("Anim", "topAnim: $topAnim >= anim: $it ---> $isReversing")
                             topAnim = it
                         }
                         postInvalidate()
@@ -140,44 +156,79 @@ class ScannerView @JvmOverloads constructor(
 
     private fun frameStrokes(left: Float, top: Float, right: Float, bottom: Float) =
         Path().apply {
-            moveTo(right, top + 120f)
+            val offset = 0.1f * (bottom - top)
+            moveTo(right, top + offset)
             lineTo(right, top)
             lineTo(left, top)
-            lineTo(left, top + 120f)
+            lineTo(left, top + offset)
 
-            moveTo(left, bottom - 120f)
+            moveTo(left, bottom - offset)
             lineTo(left, bottom)
             lineTo(right, bottom)
-            lineTo(right, bottom - 120f)
+            lineTo(right, bottom - offset)
         }
+
+    private fun startAnim() {
+        valueAnimator?.let { if (!it.isRunning) it.start() }
+    }
+
+    fun resumeAnim() {
+        valueAnimator?.resume()
+    }
+
+
+    fun pauseAnim() {
+        valueAnimator?.pause()
+    }
+
+    fun stopAnim() {
+        valueAnimator?.cancel()
+    }
+
 
     fun setMode(mode: ScanMode) {
         this.scanMode = mode
         postInvalidate()
     }
 
-    private fun startAnim() {
-        if (::valueAnimator.isInitialized && !valueAnimator.isRunning) {
-            valueAnimator.start()
+    fun setCustomRect(rect: Rect) {
+        val customRect = Rect()
+
+        var rectLeft = rect.left
+        var rectRight = rect.right
+        var rectTop = rect.top
+        var rectBottom = rect.bottom
+
+        if (rect.bottom > bottom) {
+            rectTop = bottom - rect.height()
+            rectBottom = bottom
+        } else if (rect.top < top) {
+            rectTop = top
+            rectBottom = top + rect.height()
         }
+
+        if (rect.right > right) {
+            rectLeft = right - rect.width()
+            rectRight = right
+        } else if (rect.left < left) {
+            rect.left = left
+            rectRight = left + rect.width()
+        }
+
+        if (scanMode is ScanMode.BarCode) {
+            rectTop += rect.height() / 4
+            rectBottom -= rect.height() / 4
+        }
+
+        customRect.set(
+            rectLeft + frameOffsetX,
+            rectTop + frameOffsetY,
+            rectRight + frameOffsetX,
+            rectBottom + frameOffsetY
+        )
+        this.customRect = customRect
+
+        resetAnim()
     }
 
-    fun resumeAnim() {
-        if (::valueAnimator.isInitialized) {
-            valueAnimator.resume()
-        }
-    }
-
-
-    fun pauseAnim() {
-        if (::valueAnimator.isInitialized) {
-            valueAnimator.pause()
-        }
-    }
-
-    fun stopAnim() {
-        if (::valueAnimator.isInitialized) {
-            valueAnimator.cancel()
-        }
-    }
 }

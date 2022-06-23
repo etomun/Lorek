@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager.PERMISSION_GRANTED
+import android.graphics.Rect
 import android.net.Uri
 import android.os.*
 import android.provider.MediaStore
@@ -42,17 +43,16 @@ class ScannerFragment : Fragment() {
 
     private lateinit var mode: ScanMode
     private lateinit var subText: String
+
     private var flashEnabled = true
     private var galleryEnabled = true
-
     private var lastResult: String? = null
+    private var camControl: CameraControl? = null
 
     private lateinit var camProviderFuture: ListenableFuture<ProcessCameraProvider>
     private lateinit var mainExecutor: Executor
-
     private lateinit var preview: Preview
     private lateinit var imageAnalysis: ImageAnalysis
-    private var camControl: CameraControl? = null
 
     private val camExecutor by lazy { Executors.newSingleThreadExecutor() }
     private val cameraSelector by lazy {
@@ -111,6 +111,10 @@ class ScannerFragment : Fragment() {
         binding.cbFlash.toggleGone(flashEnabled)
         binding.cbGallery.setOnCheckedChangeListener { _, b -> if (b) pickPhoto() }
         binding.cbFlash.setOnCheckedChangeListener { _, b -> switchFlash(b) }
+        binding.vAnchor.post {
+            val v = binding.vAnchor
+            binding.vScanner.setCustomRect(Rect(v.left, v.top, v.right, v.bottom))
+        }
 
         activity?.let {
             camProviderFuture = ProcessCameraProvider.getInstance(it)
@@ -135,8 +139,9 @@ class ScannerFragment : Fragment() {
                 .build()
             val analyzer = CameraAnalyzer(binding.vScanner.frameRect, mode) { onScanResult(it) }
             imageAnalysis.setAnalyzer(camExecutor, analyzer)
+
+            startPreview()
         }
-        startPreview()
     }
 
     override fun onResume() {
@@ -145,9 +150,7 @@ class ScannerFragment : Fragment() {
         binding.vScanner.resumeAnim()
 
         operateCamera {
-            camProviderFuture.get().also {
-                it.bindToLifecycle(this, cameraSelector, imageAnalysis)
-            }
+            camProviderFuture.get().bindToLifecycle(this, cameraSelector, imageAnalysis)
         }
     }
 
@@ -162,6 +165,9 @@ class ScannerFragment : Fragment() {
     override fun onDestroyView() {
         super.onDestroyView()
         binding.vScanner.stopAnim()
+
+        lastResult = null
+        camControl = null
         _binding = null
         callback = null
     }
@@ -193,7 +199,7 @@ class ScannerFragment : Fragment() {
 
     private fun startPreview() {
         operateCamera {
-            camProviderFuture.get().also {
+            camProviderFuture.get().let {
                 camControl = it.bindToLifecycle(this, cameraSelector, preview).cameraControl
             }
         }
